@@ -3,8 +3,19 @@
 
 import { defineConfig } from '#q-app/wrappers'
 import { fileURLToPath } from 'node:url'
+import fs  from 'fs'
 
 export default defineConfig((ctx) => {
+  const devServer = ctx.dev
+    ? {
+        https: {
+          key: fs.readFileSync('cert/local.key.pem'),
+          cert: fs.readFileSync('cert/local.pem'),
+        },
+        host: 'localhost',
+        open: true, // opens browser window automatically
+      }
+    : {}
   return {
     // https://v2.quasar.dev/quasar-cli-vite/prefetch-feature
     // preFetch: true,
@@ -87,17 +98,14 @@ export default defineConfig((ctx) => {
     },
 
     // Full list of options: https://v2.quasar.dev/quasar-cli-vite/quasar-config-file#devserver
-    devServer: {
-      // https: true,
-      open: true // opens browser window automatically
-    },
+    devServer,
 
     // https://v2.quasar.dev/quasar-cli-vite/quasar-config-file#framework
     framework: {
       config: {},
 
       // iconSet: 'material-icons', // Quasar icon set
-      // lang: 'en-US', // Quasar language pack
+      lang: 'pt-BR', // Quasar language pack
 
       // For special cases outside of where the auto-import strategy can have an impact
       // (like functional components as one of the examples),
