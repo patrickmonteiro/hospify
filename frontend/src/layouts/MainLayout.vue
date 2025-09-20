@@ -11,11 +11,10 @@
           @click="toggleLeftDrawer"
         />
 
-        <q-toolbar-title>
-          Quasar App
+        <q-toolbar-title class="text-bold">
+          Hospify
         </q-toolbar-title>
 
-        <div>Quasar v{{ $q.version }}</div>
       </q-toolbar>
     </q-header>
 
@@ -40,12 +39,12 @@
           </q-item-section>
         </q-item>
 
-        <q-item clickable v-ripple>
+        <q-item clickable v-ripple :to="{ name: 'municipios' }">
           <q-item-section avatar>
             <q-icon name="mdi-flag-variant-plus-outline"  />
           </q-item-section>
           <q-item-section class="text-bold text-lg">
-            Município
+            Municípios
           </q-item-section>
         </q-item>
 
