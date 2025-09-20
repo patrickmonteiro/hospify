@@ -163,7 +163,28 @@ def read_medicos():
 
 @app.get("/pacientes")
 def read_pacientes():
-    return {"Hello": "World"}
+    conn = None
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+
+        # Executa a query para selecionar todos os dados da tabela estados
+        cur.execute("SELECT id, cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10 FROM pacientes ORDER BY nome_completo;")
+
+        # Busca todos os resultados da query.
+        pacientes = cur.fetchall()
+
+        cur.close()
+
+        return pacientes
+
+    except Exception as e:
+        # Captura outros erros que possam ocorrer durante a execução
+        raise HTTPException(status_code=500, detail=f"Ocorreu um erro: {e}")
+    finally:
+        # Garante que a conexão com o banco seja sempre fechada
+        if conn is not None:
+            conn.close()
 
 @app.get("/cid10")
 def read_cid10():

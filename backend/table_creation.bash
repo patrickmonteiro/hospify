@@ -38,7 +38,7 @@ CREATE TABLE IF NOT EXISTS pacientes (
     cpf VARCHAR(11) UNIQUE NOT NULL,
     nome_completo VARCHAR(255) NOT NULL,
     genero CHAR(1),
-    codigo_ibge VARCHAR(7) NOT NULL,
+    codigo_ibge INTEGER NOT NULL,
     bairro VARCHAR(150),
     convenio CHAR(3),
     cid10 VARCHAR(3),

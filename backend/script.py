@@ -260,69 +260,98 @@ def importar_para_tabela_medicos():
 
 
 
+import xml.etree.ElementTree as ET
+import psycopg2
+from psycopg2.extras import execute_values
+import time # Para medir o tempo
+
 # --- Suas configurações de DB ---
 DB_HOST = "localhost"
 DB_PORT = "5432"
 DB_NAME = "premiersoft"
 DB_USER = "postgres"
-DB_PASS = "JeFfSc123" # Sua senha
+DB_PASS = "JeFfSc123"
 
-XML_FILE_PATH = "pacientes.xml" # O nome do seu arquivo XML
+XML_FILE_PATH = "pacientes.xml" # Seu arquivo de 2.6GB
+BATCH_SIZE = 1000 # Inserir 1000 registros por vez. Ajuste conforme a memória.
 
-def importar_xml_pacientes():
+def importar_xml_pacientes_otimizado():
     conn = None
+    total_pacientes = 0
+    start_time = time.time()
+    
     try:
         conn = psycopg2.connect(host=DB_HOST, port=DB_PORT, dbname=DB_NAME, user=DB_USER, password=DB_PASS)
         cur = conn.cursor()
 
-        tree = ET.parse(XML_FILE_PATH)
-        root = tree.getroot() # Pega o elemento raiz <Pacientes>
+        print(f"Iniciando a importação do arquivo gigante '{XML_FILE_PATH}'...")
+        
+        batch_de_pacientes = []
+        # 1. LEITURA EFICIENTE COM iterparse
+        # iterparse lê o arquivo aos poucos. O evento 'end' é disparado quando uma tag é fechada.
+        context = ET.iterparse(XML_FILE_PATH, events=('end',))
+        
+        for event, elem in context:
+            # Processamos apenas quando a tag </Paciente> é encontrada
+            if elem.tag == 'Paciente':
+                try:
+                    cpf = elem.find('CPF').text
+                    nome = elem.find('Nome_Completo').text
+                    genero = elem.find('Genero').text
+                    cod_municipio = elem.find('Cod_municipio').text
+                    bairro = elem.find('Bairro').text
+                    convenio = elem.find('Convenio').text
+                    cid10 = elem.find('CID-10').text
 
-        print(f"Iniciando a importação do arquivo '{XML_FILE_PATH}'...")
+                    # Adiciona os dados como uma tupla ao nosso lote
+                    batch_de_pacientes.append(
+                        (cpf, nome, genero, cod_municipio, bairro, convenio, cid10)
+                    )
+                    
+                    total_pacientes += 1
 
-        # Itera sobre cada tag <Paciente>
-        for paciente_node in root.findall('Paciente'):
-            try:
-                cpf = paciente_node.find('CPF').text
-                nome = paciente_node.find('Nome_Completo').text
-                genero = paciente_node.find('Genero').text
-                cod_municipio = paciente_node.find('Cod_municipio').text
-                bairro = paciente_node.find('Bairro').text
-                convenio = paciente_node.find('Convenio').text
-                cid10 = paciente_node.find('CID-10').text # A busca funciona mesmo com o hífen
+                    # 2. INSERÇÃO EM LOTE
+                    if len(batch_de_pacientes) >= BATCH_SIZE:
+                        sql_insert = """
+                            INSERT INTO pacientes 
+                            (cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10)
+                            VALUES %s
+                            ON CONFLICT (cpf) DO NOTHING;
+                        """
+                        # execute_values é MUITO mais rápido que múltiplos executes
+                        execute_values(cur, sql_insert, batch_de_pacientes)
+                        conn.commit() # Salva o lote no banco
+                        
+                        print(f"{total_pacientes} pacientes processados...")
+                        batch_de_pacientes.clear() # Limpa o lote para a próxima rodada
 
-                # Monta e executa o comando INSERT
-                sql_insert = """
-                    INSERT INTO pacientes 
-                    (cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (cpf) DO NOTHING; -- Não faz nada se um paciente com o mesmo CPF já existir
-                """
-                dados_para_inserir = (cpf, nome, genero, cod_municipio, bairro, convenio, cid10)
+                except (AttributeError, TypeError) as e:
+                    print(f"AVISO: Registro de paciente mal formatado no XML. Pulando. Erro: {e}")
                 
-                cur.execute(sql_insert, dados_para_inserir)
+                # 3. LIBERAÇÃO DE MEMÓRIA
+                # Essencial para arquivos grandes: limpa o elemento da memória após o uso
+                elem.clear()
 
-            except AttributeError as e:
-                print(f"AVISO: Registro de paciente incompleto no XML. Pulando. Erro: {e}")
-                continue
+        # Insere o último lote que sobrou (caso não seja múltiplo de BATCH_SIZE)
+        if batch_de_pacientes:
+            print("Inserindo lote final...")
+            execute_values(cur, sql_insert, batch_de_pacientes)
+            conn.commit()
 
-        conn.commit()
-        print("✅ Importação de pacientes concluída com sucesso!")
+        end_time = time.time()
+        print("✅ Importação concluída com sucesso!")
+        print(f"Total de pacientes processados: {total_pacientes}")
+        print(f"Tempo total: {end_time - start_time:.2f} segundos")
 
-    except FileNotFoundError:
-        print(f"ERRO: O arquivo '{XML_FILE_PATH}' não foi encontrado.")
-    except psycopg2.Error as e:
-        print(f"ERRO de banco de dados: {e}")
+    except (FileNotFoundError, psycopg2.Error, ET.ParseError) as e:
+        print(f"ERRO CRÍTICO: {e}")
         if conn:
             conn.rollback()
-    except ET.ParseError as e:
-        print(f"ERRO: O arquivo XML está mal formatado. {e}")
     finally:
         if conn:
             cur.close()
             conn.close()
             print("Conexão com o banco de dados fechada.")
 
-# Para executar o script
 if __name__ == "__main__":
-    importar_xml_pacientes()
+    importar_xml_pacientes_otimizado()
