@@ -1,13 +1,65 @@
-node_modules
-.git
-.gitignore
-README.md
-.env
-.nyc_output
-coverage
-.nyc_output
-.vscode
-.quasar/temp
-dist
+# Dependency directories
+node_modules/
+**/node_modules/
+
+# Build outputs
+dist/
+.quasar/
+*.log
+*.log.*
+
+# Development files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# CI/CD
+.github/
+.gitlab-ci.yml
+
+# Documentation
+README.md
+CHANGELOG.md
+docs/
+
+# Test files
+__tests__/
+**/*.test.js
+**/*.spec.js
+coverage/
+.nyc_output/
+jest.config.js
+cypress/
+
+# Environment files (keep only necessary ones)
+.env*
+!.env.example
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Editor files
+.eslintcache
+
+# Lock files (keep yarn.lock, exclude npm's)
+package-lock.json
+
+# Optional large dependencies
+cert/

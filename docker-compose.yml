@@ -22,6 +22,12 @@ services:
       - ./postgres:/docker-entrypoint-initdb.d
     networks:
       - saude_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
 
   backend:
     build:
@@ -38,10 +44,13 @@ services:
       # MUDANÇA 2: Monta a pasta ./backend no diretório /app do contêiner.
       # Agora, apenas o código do backend é sincronizado.
       - ./backend:/app
+      # Montar arquivo de dados para importação em background
+      - ./data/bulk_data.sql:/app/bulk_data.sql:ro
     networks:
       - saude_net
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   frontend:
     build:
