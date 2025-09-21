@@ -1,7 +1,7 @@
 <template>
     <div class="q-pa-md">
       <q-table
-        title="Médicos"
+        title="Hospitais"
         :rows="data"
         :columns="columns"
         row-key="name"
@@ -25,10 +25,14 @@ import { onMounted, ref} from 'vue'
 import { api } from 'boot/axios'
 
 const columns = [
-  { name: 'nome_completo', label: 'Nome Completo', field: 'nome_completo', align: 'left' },
-  { name: 'id', label: 'id', field: 'id', align: 'left' },
-  { name: 'especialidade', label: 'especialidade', field: 'especialidade', align: 'left', classes: 'text-bold' },
-  { name: 'codigo_ibge', label: 'Codigo', field: 'codigo_ibge', align: 'left', classes: 'text-bold' },
+  { name: 'bairro', label: 'Bairro', field: 'bairro', align: 'left' },
+  { name: 'codigo_ibge', label: 'codigo_ibge', field: 'codigo_ibge', align: 'left' },
+  { name: 'especialidades', label: 'especialidades', field: 'especialidades', align: 'left', classes: 'text-bold' },
+  { name: 'estado', label: 'estado', field: 'estado', align: 'left', classes: 'text-bold' },
+  { name: 'id', label: 'id', field: 'id', align: 'left', classes: 'text-bold' },
+  { name: 'leitos_totais', label: 'leitos_totais', field: 'leitos_totais', align: 'left', classes: 'text-bold' },
+  { name: 'municipio', label: 'municipio', field: 'municipio', align: 'left', classes: 'text-bold' },
+  { name: 'nome_hospital', label: 'nome_hospital', field: 'nome_hospital', align: 'left', classes: 'text-bold' },
 ]
 const filter = ref('')
 const data = ref([])
@@ -45,7 +49,7 @@ const initialPagination = ref({
 async function getEstados () {
   loading.value = true
   try {
-    const res = await api.get('/medicos')
+    const res = await api.get('/hospitais')
     console.log(res.data)
     loading.value = false
     data.value = res.data

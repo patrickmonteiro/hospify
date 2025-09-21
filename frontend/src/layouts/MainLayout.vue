@@ -75,7 +75,7 @@
           </q-item-section>
         </q-item>
 
-        <q-item clickable v-ripple>
+        <q-item clickable v-ripple :to="{ name: 'hospitais'}">
           <q-item-section avatar>
             <q-icon name="mdi-hospital-building"  />
           </q-item-section>

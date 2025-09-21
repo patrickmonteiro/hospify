@@ -77,7 +77,13 @@ app = FastAPI(lifespan=lifespan)
 # Configurar CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],  # Frontend
+    allow_origins=[
+        "http://localhost:3000",    # Frontend produção
+        "http://localhost:5173",    # Vite dev server
+        "https://localhost:5173",   # Vite dev server HTTPS
+        "http://localhost:9000",    # Quasar dev server
+        "https://localhost:9000",   # Quasar dev server HTTPS
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
