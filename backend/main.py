@@ -1,16 +1,18 @@
 import os
 import json
 import asyncio
+import math
 from decimal import Decimal
 from datetime import datetime
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Request, BackgroundTasks
-from fastapi.responses import StreamingResponse
+from fastapi import FastAPI, HTTPException, Request, BackgroundTasks, Query
+from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 import xml.etree.ElementTree as ET
 import asyncpg
 from contextlib import asynccontextmanager
 import logging
+import uuid
 
 load_dotenv()
 
@@ -29,15 +31,16 @@ DB_CONFIG = {
 
 db_pool = None
 
+# Dicionário em memória para guardar o status das tarefas de alocação
+task_status_storage = {}
+
 async def wait_for_db():
     """Aguarda o banco estar disponível com retry"""
     max_retries = 30
     retry_delay = 2
-
     for attempt in range(max_retries):
         try:
             logger.info(f"Tentativa {attempt + 1}/{max_retries} de conectar ao banco...")
-            # Tenta criar uma conexão simples primeiro
             conn = await asyncpg.connect(**DB_CONFIG)
             await conn.close()
             logger.info("Banco de dados está disponível!")
@@ -50,22 +53,36 @@ async def wait_for_db():
                 logger.error("Não foi possível conectar ao banco após todas as tentativas")
                 raise
 
-# Gerenciador de ciclo de vida do FastAPI para criar e fechar o pool
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db_pool
     logger.info("Aguardando banco de dados ficar disponível...")
-
     try:
-        # Aguarda DB estar pronto
         await wait_for_db()
-
-        # Cria pool de conexões
         logger.info("Criando pool de conexões...")
         db_pool = await asyncpg.create_pool(**DB_CONFIG)
 
-        # Iniciar importação em background após conexão
-        asyncio.create_task(start_bulk_import())
+        logger.info("Verificando/Criando tabelas de alocação...")
+        async with db_pool.acquire() as connection:
+            await connection.execute("""
+                CREATE TABLE IF NOT EXISTS medico_hospital_associacao (
+                    id SERIAL PRIMARY KEY,
+                    medico_id INTEGER NOT NULL REFERENCES medicos(id) ON DELETE CASCADE,
+                    hospital_id INTEGER NOT NULL REFERENCES hospitais(id) ON DELETE CASCADE,
+                    distancia_km REAL,
+                    UNIQUE (medico_id, hospital_id)
+                );
+            """)
+            await connection.execute("""
+                CREATE TABLE IF NOT EXISTS paciente_hospital_alocacao (
+                    id SERIAL PRIMARY KEY,
+                    paciente_id INTEGER NOT NULL REFERENCES pacientes(id) ON DELETE CASCADE UNIQUE,
+                    hospital_id INTEGER NOT NULL REFERENCES hospitais(id) ON DELETE CASCADE,
+                    distancia_km REAL NOT NULL,
+                    criterio_especialidade VARCHAR(255)
+                );
+            """)
+        logger.info("Tabelas de alocação prontas.")
         yield
     finally:
         if db_pool:
@@ -74,15 +91,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# Configurar CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
-        "http://localhost:3000",    # Frontend produção
-        "http://localhost:5173",    # Vite dev server
-        "https://localhost:5173",   # Vite dev server HTTPS
-        "http://localhost:9000",    # Quasar dev server
-        "https://localhost:9000",   # Quasar dev server HTTPS
+        "http://localhost:3000", "http://localhost:5173", "https://localhost:5173",
+        "http://localhost:9000", "https://localhost:9000",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -90,211 +103,230 @@ app.add_middleware(
 )
 
 # =============================================
-# FUNÇÃO DE STREAMING RESPONSE
+# FUNÇÕES AUXILIARES, DE LÓGICA E STREAMING
 # =============================================
 
 def json_serial(obj):
-    """JSON serializer para objetos não serializáveis por padrão"""
-    if isinstance(obj, Decimal):
-        return float(obj)
-    elif isinstance(obj, datetime):
-        return obj.isoformat()
+    if isinstance(obj, Decimal): return float(obj)
+    if isinstance(obj, datetime): return obj.isoformat()
     raise TypeError(f"Type {type(obj)} not serializable")
 
-async def generate_json_stream(query: str):
+def haversine(lat1, lon1, lat2, lon2):
+    if not all([lat1, lon1, lat2, lon2]): return float('inf')
+    R = 6371
+    dLat = math.radians(lat2 - lat1)
+    dLon = math.radians(lon2 - lon1)
+    a = math.sin(dLat/2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dLon/2)**2
+    c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+    return R * c
+
+CID10_TO_SPECIALTY_MAP = {
+    'A': 'Infectologia', 'B': 'Infectologia', 'C': 'Oncologia', 'D': 'Oncologia',
+    'E': 'Endocrinologia', 'F': 'Psiquiatria', 'G': 'Neurologia', 'H': 'Oftalmologia',
+    'I': 'Cardiologia', 'J': 'Pneumologia', 'K': 'Gastroenterologia', 'L': 'Dermatologia',
+    'M': 'Reumatologia', 'N': 'Nefrologia', 'O': 'Obstetrícia', 'P': 'Pediatria',
+    'Q': 'Genética Médica', 'S': 'Ortopedia', 'T': 'Ortopedia'
+}
+
+def get_specialty_from_cid10(cid10_code: str):
+    if not cid10_code: return 'Clínica Geral'
+    return CID10_TO_SPECIALTY_MAP.get(cid10_code[0].upper(), 'Clínica Geral')
+
+async def generate_json_stream(query: str, *args):
     try:
         async with db_pool.acquire() as connection:
-            # Use fetch para buscar todos os registros
-            records = await connection.fetch(query)
-            yield '['
-            first = True
-            for record in records:
-                if not first:
-                    yield ','
-                yield json.dumps(dict(record), default=json_serial)
-                first = False
-            yield ']'
+            async with connection.transaction():
+                cursor = await connection.cursor(query, *args)
+                yield '['
+                first = True
+                while True:
+                    record = await cursor.fetchrow()
+                    if record is None:
+                        break
+                    if not first:
+                        yield ','
+                    yield json.dumps(dict(record), default=json_serial)
+                    first = False
+                yield ']'
     except Exception as e:
         logger.error(f"Erro durante a geração do stream para a query '{query[:50]}...': {e}")
+        yield json.dumps({"error": str(e)})
 
 # =============================================
-# FUNÇÕES DE IMPORTAÇÃO EM BACKGROUND
+# LÓGICA DE ALOCAÇÃO EM BACKGROUND
 # =============================================
 
-async def check_import_status(table_name: str) -> bool:
-    """Verifica se a tabela já foi importada"""
-    async with db_pool.acquire() as connection:
-        result = await connection.fetchval(
-            "SELECT imported FROM bulk_import_status WHERE table_name = $1",
-            table_name
-        )
-        return result or False
-
-async def mark_import_complete(table_name: str, total_records: int):
-    """Marca a importação como completa"""
-    async with db_pool.acquire() as connection:
-        await connection.execute(
-            """UPDATE bulk_import_status
-               SET imported = TRUE, imported_at = NOW(), total_records = $2
-               WHERE table_name = $1""",
-            table_name, total_records
-        )
-
-async def import_bulk_data():
-    """Importa dados em massa do arquivo SQL"""
+async def executar_logica_alocacao(db_pool: asyncpg.Pool, task_id: str):
+    logger.info(f"Iniciando tarefa de alocação ({task_id})...")
     try:
-        # Verificar se já foi importado
-        if await check_import_status('estados'):
-            logger.info("Dados já foram importados anteriormente")
-            return
-
-        logger.info("Iniciando importação de dados em massa...")
-
-        # Ler arquivo SQL
-        with open('/app/bulk_data.sql', 'r', encoding='utf-8') as f:
-            sql_content = f.read()
-
+        task_status_storage[task_id] = {"status": "in_progress", "progress": 0, "message": "Buscando dados do banco..."}
+        
         async with db_pool.acquire() as connection:
-            # Desabilitar constraints temporariamente para inserção em massa
-            await connection.execute("SET session_replication_role = replica;")
+            medicos_db = await connection.fetch("SELECT m.id, m.especialidade, mun.latitude, mun.longitude, mun.codigo_ibge FROM medicos m JOIN municipios mun ON m.codigo_ibge = mun.codigo_ibge;")
+            hospitais_db = await connection.fetch("SELECT h.id, h.especialidades, mun.latitude, mun.longitude, mun.codigo_ibge FROM hospitais h JOIN municipios mun ON h.codigo_ibge = mun.codigo_ibge;")
+            
+            # Alteração para limitar a 1000 pacientes
+            pacientes_db = await connection.fetch("""
+                SELECT p.id, p.cid10_codigo, mun.latitude, mun.longitude
+                FROM pacientes p JOIN municipios mun ON p.codigo_ibge = mun.codigo_ibge
+                ORDER BY p.id
+                LIMIT 1000;
+            """)
 
-            # Executar em chunks para evitar timeout
-            statements = sql_content.split(';')
-            processed = 0
-            errors = 0
+            task_status_storage[task_id].update({"progress": 25, "message": f"Processando {len(medicos_db)} médicos..."})
+            medico_allocations = []
+            for medico in medicos_db:
+                hospitais_elegiveis = []
+                for hospital in hospitais_db:
+                    if medico['especialidade'].lower() in (h.lower() for h in hospital['especialidades']):
+                        distancia = haversine(medico['latitude'], medico['longitude'], hospital['latitude'], hospital['longitude'])
+                        if distancia <= 30:
+                            hospitais_elegiveis.append({"id": hospital['id'], "distancia": distancia, "is_same_city": medico['codigo_ibge'] == hospital['codigo_ibge']})
+                
+                hospitais_elegiveis.sort(key=lambda x: (not x['is_same_city'], x['distancia']))
+                
+                for i, h in enumerate(hospitais_elegiveis):
+                    if i < 3:
+                        medico_allocations.append((medico['id'], h['id'], h['distancia']))
 
-            for statement in statements:
-                statement = statement.strip()
-                if statement and not statement.startswith('--'):
-                    try:
-                        await connection.execute(statement)
-                        processed += 1
+            task_status_storage[task_id].update({"progress": 60, "message": f"Processando {len(pacientes_db)} pacientes..."})
+            paciente_allocations = []
+            for paciente in pacientes_db:
+                especialidade_necessaria = get_specialty_from_cid10(paciente['cid10_codigo'])
+                hospitais_compativeis = []
+                for hospital in hospitais_db:
+                    if especialidade_necessaria.lower() in (h.lower() for h in hospital['especialidades']):
+                        distancia = haversine(paciente['latitude'], paciente['longitude'], hospital['latitude'], hospital['longitude'])
+                        hospitais_compativeis.append({"id": hospital['id'], "distancia": distancia})
+                
+                if hospitais_compativeis:
+                    melhor_hospital = min(hospitais_compativeis, key=lambda x: x['distancia'])
+                    paciente_allocations.append((paciente['id'], melhor_hospital['id'], melhor_hospital['distancia'], especialidade_necessaria))
 
-                        if processed % 5000 == 0:
-                            logger.info(f"Processadas {processed} declarações SQL")
-                            await asyncio.sleep(0.1)  # Pequena pausa para não sobrecarregar
+            task_status_storage[task_id].update({"progress": 90, "message": "Salvando resultados no banco de dados..."})
+            async with connection.transaction():
+                await connection.execute("TRUNCATE TABLE medico_hospital_associacao, paciente_hospital_alocacao RESTART IDENTITY;")
+                if medico_allocations:
+                    await connection.copy_records_to_table('medico_hospital_associacao', records=medico_allocations, columns=['medico_id', 'hospital_id', 'distancia_km'])
+                if paciente_allocations:
+                    await connection.copy_records_to_table('paciente_hospital_alocacao', records=paciente_allocations, columns=['paciente_id', 'hospital_id', 'distancia_km', 'criterio_especialidade'])
 
-                    except Exception as e:
-                        errors += 1
-                        if errors <= 10:  # Log apenas os primeiros 10 erros
-                            logger.warning(f"Erro ao executar statement: {e}")
-
-            # Reabilitar constraints
-            await connection.execute("SET session_replication_role = DEFAULT;")
-
-        # Contar registros inseridos por tabela
-        async with db_pool.acquire() as connection:
-            estados_count = await connection.fetchval("SELECT COUNT(*) FROM estados")
-            municipios_count = await connection.fetchval("SELECT COUNT(*) FROM municipios")
-            cid10_count = await connection.fetchval("SELECT COUNT(*) FROM cid10")
-            hospitais_count = await connection.fetchval("SELECT COUNT(*) FROM hospitais")
-            medicos_count = await connection.fetchval("SELECT COUNT(*) FROM medicos")
-
-        # Marcar como importado com contagens reais
-        await mark_import_complete('estados', estados_count)
-        await mark_import_complete('municipios', municipios_count)
-        await mark_import_complete('cid10', cid10_count)
-        await mark_import_complete('hospitais', hospitais_count)
-        await mark_import_complete('medicos', medicos_count)
-
-        logger.info(f"Importação concluída! {processed} statements processados, {errors} erros ignorados")
-        logger.info(f"Registros: {estados_count} estados, {municipios_count} municípios, {cid10_count} CIDs, {hospitais_count} hospitais, {medicos_count} médicos")
-
-    except FileNotFoundError:
-        logger.warning("Arquivo bulk_data.sql não encontrado")
+        task_status_storage[task_id] = {
+            "status": "completed", "progress": 100, "message": "Alocação concluída com sucesso!",
+            "details": {"medicos_associados": len(medico_allocations), "pacientes_alocados": len(paciente_allocations)}
+        }
+        logger.info(f"Tarefa de alocação ({task_id}) concluída.")
     except Exception as e:
-        logger.error(f"Erro durante importação: {e}")
-
-async def start_bulk_import():
-    """Inicia a importação em background"""
-    await asyncio.sleep(5)  # Aguarda 5s para garantir que o DB está pronto
-    await import_bulk_data()
+        logger.error(f"ERRO na tarefa de alocação ({task_id}): {e}", exc_info=True)
+        task_status_storage[task_id] = {"status": "failed", "progress": 0, "message": f"Erro: {str(e)}"}
 
 # =============================================
-# ENDPOINTS DE STATUS E CONTROLE
+# ENDPOINTS DA API
 # =============================================
 
-@app.get("/import/status")
-async def get_import_status():
-    """Retorna o status da importação"""
+@app.get("/stats")
+async def get_database_stats():
+    stats = {}
+    tables = ["estados", "municipios", "cid10", "hospitais", "medicos", "pacientes"]
     try:
         async with db_pool.acquire() as connection:
-            status = await connection.fetch(
-                "SELECT table_name, imported, imported_at, total_records FROM bulk_import_status"
-            )
-            return {"import_status": status}
+            for table in tables:
+                stats[table] = await connection.fetchval(f"SELECT COUNT(*) FROM {table}")
+        return stats
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao verificar status: {e}")
+        raise HTTPException(status_code=500, detail="Erro ao obter estatísticas.")
 
-@app.post("/import/trigger")
-async def trigger_import(background_tasks: BackgroundTasks):
-    """Dispara importação manual"""
-    background_tasks.add_task(import_bulk_data)
-    return {"message": "Importação iniciada em background"}
+# --- Endpoints de Alocação ---
+@app.post("/alocar", status_code=202)
+async def alocar_recursos(background_tasks: BackgroundTasks):
+    task_id = str(uuid.uuid4())
+    task_status_storage[task_id] = {"status": "pending", "progress": 0, "message": "Tarefa agendada."}
+    background_tasks.add_task(executar_logica_alocacao, db_pool, task_id)
+    return {"message": "Processo de alocação iniciado.", "task_id": task_id, "status_endpoint": f"/alocacao/status/{task_id}"}
 
-# =============================================
-# ENDPOINTS GET COM STREAMING RESPONSE
-# =============================================
+@app.get("/alocacao/status/{task_id}")
+async def get_alocacao_status(task_id: str):
+    status = task_status_storage.get(task_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Tarefa não encontrada.")
+    return status
 
+# --- Endpoints de Consulta de Resultados da Alocação ---
+@app.get("/medicos/{medico_id}/alocacoes")
+async def get_alocacoes_medico(medico_id: int):
+    query = """
+        SELECT h.id AS hospital_id, h.nome AS nome_hospital, m.nome AS municipio, e.uf, mha.distancia_km
+        FROM medico_hospital_associacao mha JOIN hospitais h ON mha.hospital_id = h.id
+        JOIN municipios m ON h.codigo_ibge = m.codigo_ibge JOIN estados e ON m.codigo_uf = e.codigo_uf
+        WHERE mha.medico_id = $1 ORDER BY mha.distancia_km;
+    """
+    async with db_pool.acquire() as c: records = await c.fetch(query, medico_id)
+    if not records: raise HTTPException(404, "Médico não encontrado ou sem alocações.")
+    return [dict(r) for r in records]
+
+@app.get("/pacientes/{paciente_id}/alocacao")
+async def get_alocacao_paciente(paciente_id: int):
+    query = """
+        SELECT h.id AS hospital_id, h.nome, m.nome AS municipio, e.uf, pha.distancia_km, pha.criterio_especialidade
+        FROM paciente_hospital_alocacao pha JOIN hospitais h ON pha.hospital_id = h.id
+        JOIN municipios m ON h.codigo_ibge = m.codigo_ibge JOIN estados e ON m.codigo_uf = e.codigo_uf
+        WHERE pha.paciente_id = $1;
+    """
+    async with db_pool.acquire() as c: record = await c.fetchrow(query, paciente_id)
+    if not record: raise HTTPException(404, "Paciente não encontrado ou não alocado.")
+    return dict(record)
+
+# --- Endpoints de Consulta de Dados com Paginação e Streaming ---
 @app.get("/estados")
-async def stream_estados():
-    query = "SELECT id, codigo_uf, uf, nome, latitude, longitude, regiao FROM estados ORDER BY nome;"
-    return StreamingResponse(generate_json_stream(query), media_type="application/json")
+async def stream_estados(offset: int = 0, limit: int = Query(default=100, lte=1000)):
+    query = "SELECT id, codigo_uf, uf, nome, latitude, longitude, regiao FROM estados ORDER BY nome LIMIT $1 OFFSET $2;"
+    return StreamingResponse(generate_json_stream(query, limit, offset), media_type="application/json")
 
 @app.get("/municipios")
-async def stream_municipios():
-    query = "SELECT id, codigo_ibge, nome, latitude, longitude, codigo_uf FROM municipios ORDER BY nome;"
-    return StreamingResponse(generate_json_stream(query), media_type="application/json")
+async def stream_municipios(offset: int = 0, limit: int = Query(default=100, lte=1000)):
+    query = "SELECT id, codigo_ibge, nome, latitude, longitude, codigo_uf FROM municipios ORDER BY nome LIMIT $1 OFFSET $2;"
+    return StreamingResponse(generate_json_stream(query, limit, offset), media_type="application/json")
 
 @app.get("/hospitais")
-async def stream_hospitais():
+async def stream_hospitais(offset: int = 0, limit: int = Query(default=100, lte=1000)):
     query = """
-        SELECT
-            h.id, h.nome AS nome_hospital, h.bairro, h.especialidades, h.leitos_totais,
+        SELECT h.id, h.nome AS nome_hospital, h.bairro, h.especialidades, h.leitos_totais,
             h.codigo_ibge, m.nome AS municipio, e.nome AS estado
-        FROM hospitais AS h
-        JOIN municipios AS m ON h.codigo_ibge = m.codigo_ibge
-        JOIN estados AS e ON m.codigo_uf = e.codigo_uf
-        ORDER BY h.nome;
+        FROM hospitais h JOIN municipios m ON h.codigo_ibge = m.codigo_ibge
+        JOIN estados e ON m.codigo_uf = e.codigo_uf
+        ORDER BY h.nome LIMIT $1 OFFSET $2;
     """
-    return StreamingResponse(generate_json_stream(query), media_type="application/json")
+    return StreamingResponse(generate_json_stream(query, limit, offset), media_type="application/json")
 
 @app.get("/medicos")
-async def stream_medicos():
-    query = "SELECT id, nome_completo, especialidade, codigo_ibge FROM medicos ORDER BY nome_completo;"
-    return StreamingResponse(generate_json_stream(query), media_type="application/json")
+async def stream_medicos(offset: int = 0, limit: int = Query(default=100, lte=1000)):
+    query = "SELECT id, nome_completo, especialidade, codigo_ibge FROM medicos ORDER BY nome_completo LIMIT $1 OFFSET $2;"
+    return StreamingResponse(generate_json_stream(query, limit, offset), media_type="application/json")
 
 @app.get("/pacientes")
-async def stream_pacientes_get():
-    query = "SELECT id, cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10_codigo FROM pacientes ORDER BY nome_completo;"
-    return StreamingResponse(generate_json_stream(query), media_type="application/json")
+async def stream_pacientes_get(offset: int = 0, limit: int = Query(default=100, lte=1000)):
+    query = "SELECT id, cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10_codigo FROM pacientes ORDER BY nome_completo LIMIT $1 OFFSET $2;"
+    return StreamingResponse(generate_json_stream(query, limit, offset), media_type="application/json")
 
 @app.get("/cid10")
-async def stream_cid10():
-    query = "SELECT codigo, descricao FROM cid10 ORDER BY codigo;"
-    return StreamingResponse(generate_json_stream(query), media_type="application/json")
+async def stream_cid10(offset: int = 0, limit: int = Query(default=100, lte=1000)):
+    query = "SELECT codigo, descricao FROM cid10 ORDER BY codigo LIMIT $1 OFFSET $2;"
+    return StreamingResponse(generate_json_stream(query, limit, offset), media_type="application/json")
 
-# =============================================
-# ENDPOINT POST PARA UPLOAD DE PACIENTES
-# =============================================
-
+# --- Endpoint de Upload de Pacientes ---
 @app.post("/pacientes/stream")
 async def stream_pacientes_post(request: Request):
     parser = ET.XMLPullParser(['end'])
     BATCH_SIZE = 5000
     batch = []
     total_pacientes_processados = 0
-
     upsert_query = """
         INSERT INTO pacientes (cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10_codigo)
         VALUES ($1, $2, $3, $4, $5, $6, $7)
         ON CONFLICT (cpf) DO UPDATE SET
-            nome_completo = EXCLUDED.nome_completo,
-            genero = EXCLUDED.genero,
-            codigo_ibge = EXCLUDED.codigo_ibge,
-            bairro = EXCLUDED.bairro,
-            convenio = EXCLUDED.convenio,
-            cid10_codigo = EXCLUDED.cid10_codigo;
+            nome_completo = EXCLUDED.nome_completo, genero = EXCLUDED.genero,
+            codigo_ibge = EXCLUDED.codigo_ibge, bairro = EXCLUDED.bairro,
+            convenio = EXCLUDED.convenio, cid10_codigo = EXCLUDED.cid10_codigo;
     """
     try:
         async with db_pool.acquire() as connection:
@@ -303,30 +335,22 @@ async def stream_pacientes_post(request: Request):
                 for event, elem in parser.read_events():
                     if elem.tag == 'Paciente':
                         paciente_tuple = (
-                            elem.findtext("CPF"),
-                            elem.findtext("Nome_Completo"),
+                            elem.findtext("CPF"), elem.findtext("Nome_Completo"),
                             elem.findtext("Genero"),
-                            # Converte para integer, se necessário
                             int(elem.findtext("Cod_municipio")) if elem.findtext("Cod_municipio") else None,
-                            elem.findtext("Bairro"),
-                            elem.findtext("Convenio"),
+                            elem.findtext("Bairro"), elem.findtext("Convenio"),
                             elem.findtext("CID-10")
                         )
                         batch.append(paciente_tuple)
-
                         if len(batch) >= BATCH_SIZE:
                             await connection.executemany(upsert_query, batch)
                             total_pacientes_processados += len(batch)
                             batch.clear()
-
                         elem.clear()
-
             if batch:
                 await connection.executemany(upsert_query, batch)
                 total_pacientes_processados += len(batch)
-
         return {"message": f"Stream processado. {total_pacientes_processados} pacientes inseridos/atualizados."}
-
     except Exception as e:
-        logger.error(f"Erro durante o stream: {e}")
-        raise HTTPException(status_code=500, detail=f"Ocorreu um erro no processamento do stream: {e}")
+        logger.error(f"Erro durante o stream de pacientes: {e}")
+        raise HTTPException(status_code=500, detail="Ocorreu um erro no processamento do stream.")
