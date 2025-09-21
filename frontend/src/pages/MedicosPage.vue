@@ -7,6 +7,7 @@
 
 <script setup>
 import { ref } from 'vue';
+import { api } from 'boot/axios'
 
 const file = ref(null);
 const fileName = ref('');
@@ -42,18 +43,17 @@ const processFile = (fileToProcess) => {
 
 const uploadChunk = (chunk, index, total) => {
   const formData = new FormData();
-  formData.append('file_chunk', chunk);
+  formData.append('file', chunk);
   formData.append('chunk_index', index);
   formData.append('total_chunks', total);
-  formData.append('file_name', fileName.value); // O nome do arquivo original
-  // Use uma biblioteca como Axios ou a Fetch API para enviar
-  // a fatia para o seu endpoint de upload no servidor.
-  // Exemplo com Fetch API:
-  fetch('http://seu-servidor.com/upload', {
-    method: 'POST',
-    body: formData,
+  formData.append('filename', fileName.value);
+
+  api.post('/upload', formData, {
+    headers: {
+      'Content-Type': 'multipart/form-data'
+    }
   })
-    .then(response => response.json())
+    .then(response => response.data)
     .then(data => {
       console.log(data)
       console.log(`Fatia ${index + 1} de ${total} enviada com sucesso!`);
