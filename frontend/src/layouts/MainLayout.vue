@@ -30,6 +30,15 @@
           Menu Principal
         </q-item-label>
 
+        <q-item clickable v-ripple exact :to="{ name: 'dashboard' }">
+          <q-item-section avatar>
+            <q-icon name="mdi-chart-timeline"  />
+          </q-item-section>
+          <q-item-section class="text-bold text-lg">
+            Dashboard
+          </q-item-section>
+        </q-item>
+
         <q-item clickable v-ripple exact :to="{ name: 'estados' }">
           <q-item-section avatar>
             <q-icon name="mdi-flag"  />
