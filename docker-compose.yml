@@ -8,25 +8,55 @@ services:
     restart: always
     env_file:
       - .env
-    command:
-      - "postgres"
-      - "-c"
-      - "fsync=off"
-      - "-c"
-      - "synchronous_commit=off"
-      - "-c"
-      - "full_page_writes=off"
-      - "-c"
-      - "max_wal_size=1GB"
-      - "-c"
-      - "maintenance_work_mem=256MB"
+    command: >
+      postgres
+      -c fsync=off
+      -c synchronous_commit=off
+      -c full_page_writes=off
+      -c max_wal_size=1GB
+      -c maintenance_work_mem=256MB
     ports:
       - "9000:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./postgres:/docker-entrypoint-initdb.d 
+      - ./postgres:/docker-entrypoint-initdb.d
     networks:
       - saude_net
+
+  backend:
+    build:
+      # MUDANÇA 1: Define o "contexto" do build para a pasta ./backend
+      # Docker irá procurar o Dockerfile dentro desta pasta.
+      context: ./backend
+    container_name: backend
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    volumes:
+      # MUDANÇA 2: Monta a pasta ./backend no diretório /app do contêiner.
+      # Agora, apenas o código do backend é sincronizado.
+      - ./backend:/app
+    networks:
+      - saude_net
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: hospify-frontend
+    ports:
+      - "3000:80"
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+    networks:
+      - saude_net
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:

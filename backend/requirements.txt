@@ -1,0 +1,15 @@
+# --- Servidor e Framework ---
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+
+# --- Banco de Dados ---
+# Driver assíncrono para PostgreSQL (usado no endpoint de stream)
+asyncpg==0.29.0
+
+# Driver síncrono para PostgreSQL (usado nos seus endpoints GET)
+# Mesmo que você planeje remover, é bom manter por enquanto para não quebrar o código existente.
+psycopg2-binary==2.9.9
+
+# --- Ferramentas Adicionais ---
+# Para carregar variáveis de ambiente do arquivo .env (opcional, mas recomendado)
+python-dotenv==1.0.1
