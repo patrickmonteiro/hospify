@@ -266,7 +266,7 @@ async def stream_medicos():
 
 @app.get("/pacientes")
 async def stream_pacientes_get():
-    query = "SELECT id, cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10_codigo FROM pacientes ORDER BY nome_completo;"
+    query = "SELECT id, cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10_codigo FROM pacientes ORDER BY nome_completo LIMIT 500;"
     return StreamingResponse(generate_json_stream(query), media_type="application/json")
 
 @app.get("/cid10")
