@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS pacientes (
     codigo_ibge INTEGER NOT NULL,
     bairro VARCHAR(150),
     convenio CHAR(3),
-    cid10_codigo VARCHAR(10), -- Nome ajustado para clareza
+    cid10_codigo VARCHAR(10)
 );
 
 -- Tabela de Médicos

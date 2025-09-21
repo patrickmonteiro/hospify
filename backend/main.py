@@ -1,17 +1,39 @@
-from fastapi import FastAPI, HTTPException, File, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 import psycopg2
-from psycopg2.extras import RealDictCursor, execute_values
-from aiofiles import open as aio_open
+from psycopg2.extras import RealDictCursor
 import xml.etree.ElementTree as ET
+import asyncpg
+from contextlib import asynccontextmanager
 
 app = FastAPI()
-
 
 DB_HOST = "localhost"
 DB_PORT = "9000"
 DB_NAME = "db"
 DB_USER = "admin"
 DB_PASS = "admin"
+
+DB_CONFIG = {
+    "host": "localhost",
+    "port": 9000,
+    "user": "admin",
+    "password": "admin",
+    "database": "db"
+}
+
+db_pool = None
+
+# Gerenciador de ciclo de vida do FastAPI para criar e fechar o pool
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global db_pool
+    print("Conectando ao banco de dados...")
+    db_pool = await asyncpg.create_pool(**DB_CONFIG)
+    yield
+    print("Fechando conexão com o banco de dados...")
+    await db_pool.close()
+
+app = FastAPI(lifespan=lifespan)
 
 def get_db_connection():
     """Função auxiliar para criar e retornar uma conexão com o banco."""
@@ -208,60 +230,71 @@ def read_cid10():
 # POST endpoints
 
 @app.post("/pacientes")
-def create_paciente(file: UploadFile = File(...)):
-    if not file.filename.endswith(".xml"):
-        raise HTTPException(status_code=400, detail="Apenas arquivos .xml são aceitos.")
+async def stream_pacientes(request: Request):
+    # Verificação do tipo de arquivo (opcional, pode ser feita pelo header Content-Type)
+    # content_type = request.headers.get("content-type")
+    # if "xml" not in content_type:
+    #     raise HTTPException(status_code=400, detail="Apenas arquivos .xml são aceitos.")
 
-    conn = None
-    BATCH_SIZE = 10000
+    # Inicializa o parser de XML que aceita dados incrementais
+    parser = ET.XMLPullParser(['end'])
+    
+    BATCH_SIZE = 5000  # Lotes menores podem dar um feedback mais rápido no DB
     batch = []
     total_pacientes_processados = 0
+    
+    # Query de "Inserir ou Atualizar" para asyncpg. Note a sintaxe $1, $2...
+    upsert_query = """
+        INSERT INTO pacientes (cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10_codigo)
+        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        ON CONFLICT (cpf) DO UPDATE SET
+            nome_completo = EXCLUDED.nome_completo,
+            genero = EXCLUDED.genero,
+            codigo_ibge = EXCLUDED.codigo_ibge,
+            bairro = EXCLUDED.bairro,
+            convenio = EXCLUDED.convenio,
+            cid10_codigo = EXCLUDED.cid10_codigo;
+    """
 
     try:
-        conn = get_db_connection()
-        cur = conn.cursor()
+        # Pega uma conexão do pool
+        async with db_pool.acquire() as connection:
+            # Itera sobre os "chunks" de bytes que chegam na requisição
+            async for chunk in request.stream():
+                # Alimenta o parser com o chunk de dados
+                parser.feed(chunk)
+                
+                # Processa os eventos que o parser gerou com o novo chunk
+                for event, elem in parser.read_events():
+                    if elem.tag == 'Paciente':
+                        paciente_tuple = (
+                            elem.findtext("CPF"),
+                            elem.findtext("Nome_Completo"),
+                            elem.findtext("Genero"),
+                            # Converte para integer, se necessário
+                            int(elem.findtext("Cod_municipio")) if elem.findtext("Cod_municipio") else None,
+                            elem.findtext("Bairro"),
+                            elem.findtext("Convenio"),
+                            elem.findtext("CID-10")
+                        )
+                        batch.append(paciente_tuple)
 
-        insert_query = """
-            INSERT INTO pacientes (
-                cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10_codigo
-            ) VALUES %s;
-        """
+                        if len(batch) >= BATCH_SIZE:
+                            # A mágica do asyncpg: executemany não bloqueia o servidor
+                            await connection.executemany(upsert_query, batch)
+                            total_pacientes_processados += len(batch)
+                            batch.clear()
+                        
+                        elem.clear() # Libera a memória do elemento processado
 
-        context = ET.iterparse(file.file, events=('end',))
+            # Insere o último lote que sobrou
+            if batch:
+                await connection.executemany(upsert_query, batch)
+                total_pacientes_processados += len(batch)
+        
+        return {"message": f"Stream processado. {total_pacientes_processados} pacientes inseridos/atualizados."}
 
-        for event, elem in context:
-            if elem.tag == 'Paciente':
-                paciente_tuple = (
-                    elem.findtext("CPF"),
-                    elem.findtext("Nome_Completo"),
-                    elem.findtext("Genero"),
-                    elem.findtext("Cod_municipio"),
-                    elem.findtext("Bairro"),
-                    elem.findtext("Convenio"),
-                    elem.findtext("CID-10")
-                )
-                batch.append(paciente_tuple)
-
-                if len(batch) >= BATCH_SIZE:
-                    execute_values(cur, insert_query, batch)
-                    total_pacientes_processados += len(batch)
-                    batch.clear()
-
-                elem.clear()
-
-        if batch:
-            execute_values(cur, insert_query, batch)
-            total_pacientes_processados += len(batch)
-
-        conn.commit()
-        cur.close()
-
-        return {"message": f"Total de {total_pacientes_processados} pacientes inseridos com sucesso!"}
-
-    except (Exception, psycopg2.Error) as e:
-        if conn:
-            conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Ocorreu um erro no processamento: {e}")
-    finally:
-        if conn is not None:
-            conn.close()
+    except Exception as e:
+        # Em caso de erro, é importante logar para saber o que aconteceu
+        print(f"Erro durante o stream: {e}")
+        raise HTTPException(status_code=500, detail=f"Ocorreu um erro no processamento do stream: {e}")
