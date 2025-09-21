@@ -62,7 +62,6 @@ CREATE TABLE IF NOT EXISTS pacientes (
     bairro VARCHAR(150),
     convenio CHAR(3),
     cid10_codigo VARCHAR(10), -- Nome ajustado para clareza
-    CONSTRAINT fk_municipio_residencia FOREIGN KEY (codigo_ibge) REFERENCES municipios(codigo_ibge),
     CONSTRAINT fk_cid10 FOREIGN KEY (cid10_codigo) REFERENCES cid10(codigo)
 );
 
