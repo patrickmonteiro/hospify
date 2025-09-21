@@ -93,5 +93,36 @@ CREATE INDEX IF NOT EXISTS idx_pacientes_codigo_ibge ON pacientes(codigo_ibge);
 CREATE INDEX IF NOT EXISTS idx_pacientes_cid10_codigo ON pacientes(cid10_codigo);
 CREATE INDEX IF NOT EXISTS idx_medicos_codigo_ibge ON medicos(codigo_ibge);
 
+-- Inserir dados mínimos para permitir conexão do backend
+INSERT INTO estados (codigo_uf, uf, nome, regiao) VALUES
+('SP', 'SP', 'São Paulo', 'Sudeste'),
+('RJ', 'RJ', 'Rio de Janeiro', 'Sudeste'),
+('MG', 'MG', 'Minas Gerais', 'Sudeste')
+ON CONFLICT (codigo_uf) DO NOTHING;
+
+INSERT INTO municipios (codigo_ibge, nome, codigo_uf) VALUES
+(3550308, 'São Paulo', 'SP'),
+(3304557, 'Rio de Janeiro', 'RJ'),
+(3106200, 'Belo Horizonte', 'MG')
+ON CONFLICT (codigo_ibge) DO NOTHING;
+
+INSERT INTO cid10 (codigo, descricao) VALUES
+('A00', 'Cólera'),
+('A01', 'Febres tifóide e paratifóide'),
+('A02', 'Outras infecções por Salmonella')
+ON CONFLICT (codigo) DO NOTHING;
+
+-- Criar tabela para controlar status da importação em massa
+CREATE TABLE IF NOT EXISTS bulk_import_status (
+    table_name VARCHAR(50) PRIMARY KEY,
+    imported BOOLEAN DEFAULT FALSE,
+    imported_at TIMESTAMP,
+    total_records INTEGER DEFAULT 0
+);
+
+INSERT INTO bulk_import_status (table_name) VALUES
+('estados'), ('municipios'), ('cid10'), ('hospitais'), ('medicos'), ('pacientes')
+ON CONFLICT (table_name) DO NOTHING;
+
 -- Finaliza a transação, aplicando todas as alterações.
 COMMIT;

@@ -2,7 +2,7 @@ import { defineBoot } from '#q-app/wrappers'
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: 'https://eighty-jars-wear.loca.lt/',
+  baseURL: 'http://localhost:8000/',
 })
 
 export default defineBoot(({ app }) => {
