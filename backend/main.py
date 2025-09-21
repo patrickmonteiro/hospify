@@ -1,14 +1,14 @@
 import os
+import json
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse
 import xml.etree.ElementTree as ET
 import asyncpg
 from contextlib import asynccontextmanager
 
-# Carrega as variáveis de ambiente do arquivo .env
 load_dotenv()
 
-# Constrói o dicionário de configuração a partir das variáveis de ambiente
 DB_CONFIG = {
     "host": os.getenv("DB_HOST"),
     "port": int(os.getenv("DB_PORT")),
@@ -19,7 +19,6 @@ DB_CONFIG = {
 
 db_pool = None
 
-# Gerenciador de ciclo de vida do FastAPI para criar e fechar o pool
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global db_pool
@@ -34,86 +33,62 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-# =============================================
-# ENDPOINTS GET (AGORA ASSÍNCRONOS)
-# =============================================
+async def generate_json_stream(query: str):
+    try:
+        async with db_pool.acquire() as connection:
+            async with connection.transaction():
+                cursor = await connection.cursor(query)
+                yield '['
+                first = True
+                async for record in cursor:
+                    if not first:
+                        yield ','
+                    yield json.dumps(dict(record))
+                    first = False
+                yield ']'
+    except Exception as e:
+        print(f"Erro durante a geração do stream para a query '{query[:50]}...': {e}")
 
 @app.get("/estados")
-async def read_estados():
-    try:
-        async with db_pool.acquire() as connection:
-            query = "SELECT id, codigo_uf, uf, nome, latitude, longitude, regiao FROM estados ORDER BY nome;"
-            estados = await connection.fetch(query)
-            return estados
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ocorreu um erro ao buscar estados: {e}")
+async def stream_estados():
+    query = "SELECT id, codigo_uf, uf, nome, latitude, longitude, regiao FROM estados ORDER BY nome;"
+    return StreamingResponse(generate_json_stream(query), media_type="application/json")
 
 @app.get("/municipios")
-async def read_municipios():
-    try:
-        async with db_pool.acquire() as connection:
-            query = "SELECT id, codigo_ibge, nome, latitude, longitude, codigo_uf FROM municipios ORDER BY nome;"
-            municipios = await connection.fetch(query)
-            return municipios
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ocorreu um erro ao buscar municípios: {e}")
+async def stream_municipios():
+    query = "SELECT id, codigo_ibge, nome, latitude, longitude, codigo_uf FROM municipios ORDER BY nome;"
+    return StreamingResponse(generate_json_stream(query), media_type="application/json")
 
 @app.get("/hospitais")
-async def read_hospitais():
-    try:
-        async with db_pool.acquire() as connection:
-            query = """
-                SELECT
-                    h.id, h.nome AS nome_hospital, h.bairro, h.especialidades, h.leitos_totais,
-                    h.codigo_ibge, m.nome AS municipio, e.nome AS estado
-                FROM hospitais AS h
-                JOIN municipios AS m ON h.codigo_ibge = m.codigo_ibge
-                JOIN estados AS e ON m.codigo_uf = e.codigo_uf 
-                ORDER BY h.nome;
-            """
-            hospitais = await connection.fetch(query)
-            return hospitais
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ocorreu um erro ao buscar hospitais: {e}")
+async def stream_hospitais():
+    query = """
+        SELECT
+            h.id, h.nome AS nome_hospital, h.bairro, h.especialidades, h.leitos_totais,
+            h.codigo_ibge, m.nome AS municipio, e.nome AS estado
+        FROM hospitais AS h
+        JOIN municipios AS m ON h.codigo_ibge = m.codigo_ibge
+        JOIN estados AS e ON m.codigo_uf = e.codigo_uf 
+        ORDER BY h.nome;
+    """
+    return StreamingResponse(generate_json_stream(query), media_type="application/json")
 
 @app.get("/medicos")
-async def read_medicos():
-    try:
-        async with db_pool.acquire() as connection:
-            query = "SELECT id, nome_completo, especialidade, codigo_ibge FROM medicos ORDER BY nome_completo;"
-            medicos = await connection.fetch(query)
-            return medicos
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ocorreu um erro ao buscar médicos: {e}")
+async def stream_medicos():
+    query = "SELECT id, nome_completo, especialidade, codigo_ibge FROM medicos ORDER BY nome_completo;"
+    return StreamingResponse(generate_json_stream(query), media_type="application/json")
 
 @app.get("/pacientes")
-async def read_pacientes():
-    try:
-        async with db_pool.acquire() as connection:
-            # CORREÇÃO: Sua query anterior tinha 'cid10, codigo' que parecia um erro de digitação.
-            # Assumindo que a coluna se chama 'cid10_codigo'. Ajuste se necessário.
-            query = "SELECT id, cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10_codigo FROM pacientes ORDER BY nome_completo;"
-            pacientes = await connection.fetch(query)
-            return pacientes
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ocorreu um erro ao buscar pacientes: {e}")
+async def stream_pacientes_get():
+    query = "SELECT id, cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10_codigo FROM pacientes ORDER BY nome_completo;"
+    return StreamingResponse(generate_json_stream(query), media_type="application/json")
 
 @app.get("/cid10")
-async def read_cid10():
-    try:
-        async with db_pool.acquire() as connection:
-            query = "SELECT codigo, descricao FROM cid10 ORDER BY codigo;"
-            cid10 = await connection.fetch(query)
-            return cid10
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ocorreu um erro ao buscar CID-10: {e}")
-
-# =============================================
-# ENDPOINT POST (STREAMING)
-# =============================================
+async def stream_cid10():
+    query = "SELECT codigo, descricao FROM cid10 ORDER BY codigo;"
+    return StreamingResponse(generate_json_stream(query), media_type="application/json")
 
 @app.post("/pacientes/stream")
-async def stream_pacientes(request: Request):
+async def stream_pacientes_post(request: Request):
     parser = ET.XMLPullParser(['end'])
     BATCH_SIZE = 5000
     batch = []
@@ -140,6 +115,7 @@ async def stream_pacientes(request: Request):
                             elem.findtext("CPF"),
                             elem.findtext("Nome_Completo"),
                             elem.findtext("Genero"),
+                            # Converte para integer, se necessário
                             int(elem.findtext("Cod_municipio")) if elem.findtext("Cod_municipio") else None,
                             elem.findtext("Bairro"),
                             elem.findtext("Convenio"),
