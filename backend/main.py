@@ -34,7 +34,7 @@ def get_db_connection():
             dbname=DB_NAME,
             user=DB_USER,
             password=DB_PASS,
-            cursor_factory=RealDictCursor  # <-- A MÁGICA ACONTECE AQUI
+            cursor_factory=RealDictCursor
         )
         return conn
     except psycopg2.OperationalError as e:
@@ -192,6 +192,31 @@ def read_pacientes():
         if conn is not None:
             conn.close()
 
+@app.get("/cid10")
+def read_cid10():
+    return {"Hello": "World"}
+
+# POST endpoints
+
+@app.post("/municipios")
+def create_municipio():
+    return {"Hello": "World"}
+
+@app.post("/estados")
+def create_estado():
+    return {"Hello": "World"}
+
+@app.post("/pacientes")
+def create_paciente():
+    return {"Hello": "World "}
+
+@app.post("/medicos")
+def create_medico():
+    return {"Hello": "World"}
+
+@app.post("/cid10")
+def create_cid10():
+    return {"Hello": "World"}
 
 UPLOAD_STATE: Dict[str, Dict] = {}
 
@@ -224,6 +249,7 @@ async def upload_chunk(
     # Processa o conteúdo da fatia de forma assíncrona
     content = await file.read()
     process_chunk(upload_id, content)
+    print(content)
 
     # Aumenta a contagem de fatias processadas
     UPLOAD_STATE[upload_id]["processed_chunks"] += 1
@@ -257,29 +283,3 @@ def process_chunk(upload_id: str, content: bytes):
     # Atualiza as contagens no estado do upload
     state["total_lines"] += len(lines)
     state["python_occurrences"] += text_content.lower().count("python")
-
-@app.get("/cid10")
-def read_cid10():
-    return {"Hello": "World"}
-
-# POST endpoints
-
-@app.post("/municipios")
-def create_municipio():
-    return {"Hello": "World"}
-
-@app.post("/estados")
-def create_estado():
-    return {"Hello": "World"}
-
-@app.post("/pacientes")
-def create_paciente():
-    return {"Hello": "World "}
-
-@app.post("/medicos")
-def create_medico():
-    return {"Hello": "World"}
-
-@app.post("/cid10")
-def create_cid10():
-    return {"Hello": "World"}

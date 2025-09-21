@@ -1,357 +1,195 @@
 import csv
+import time
 import psycopg2
 import xml.etree.ElementTree as ET
-
-# --- CONFIGURAÇÕES - ALTERE ESTAS INFORMAÇÕES ---
-DB_HOST = "localhost"
-DB_PORT = "5432"
-DB_NAME = "premiersoft"
-DB_USER = "postgres"
-DB_PASS = "JeFfSc123"
-# -----------------------------------------------
-
-def importar_para_tabela_estados():
-    """
-    Função para importar dados do CSV para a tabela 'estados'.
-    """
-    # SQL AJUSTADO para a sua tabela 'estados'.
-    # A ordem das colunas e dos %s deve ser a mesma do seu CSV!
-    sql_insert_query = """
-        INSERT INTO estados (codigo_uf, uf, nome, latitude, longitude, regiao)
-        VALUES (%s, %s, %s, %s, %s, %s);
-    """
-
-    conn = None
-    try:
-        # Conecta ao banco de dados PostgreSQL
-        conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASS
-        )
-        cur = conn.cursor()
-
-        # Abre o arquivo CSV para leitura
-        with open(CSV_PATH, mode='r', encoding='utf-8') as csv_file:
-            csv_reader = csv.reader(csv_file)
-            next(csv_reader) # Pula o cabeçalho
-
-            print(f"Iniciando a importação do arquivo '{CSV_PATH}' para a tabela '{TABLE_NAME}'...")
-            
-            # Itera sobre cada linha do arquivo CSV
-            for row in csv_reader:
-                try:
-                    cur.execute(sql_insert_query, tuple(row))
-                except psycopg2.Error as e:
-                    print(f"ERRO ao inserir a linha {row}: {e}")
-                    conn.rollback() # Desfaz a transação da linha com erro
-
-            # Comita (salva) as alterações no banco
-            conn.commit()
-            print("✅ Importação concluída com sucesso!")
-
-    except FileNotFoundError:
-        print(f"ERRO: O arquivo '{CSV_PATH}' não foi encontrado.")
-    except psycopg2.Error as e:
-        print(f"ERRO de banco de dados: {e}")
-    finally:
-        # Garante que a conexão seja fechada
-        if conn is not None:
-            cur.close()
-            conn.close()
-            print("Conexão com o banco de dados fechada.")
-
-def importar_para_tabela_municipios():
-    """
-    Função que importa apenas as colunas necessárias de um CSV,
-    independentemente da ordem ou de colunas extras no arquivo.
-    """
-    # 1. Defina as colunas que a sua TABELA precisa, na ordem do INSERT.
-    colunas_requeridas = ['codigo_ibge', 'nome', 'latitude', 'longitude', 'codigo_uf']
-
-    # 2. Crie o SQL com base nas colunas requeridas.
-    sql_insert_query = f"""
-        INSERT INTO municipios ({', '.join(colunas_requeridas)})
-        VALUES ({', '.join(['%s'] * len(colunas_requeridas))});
-    """
-
-    conn = None
-    
-    try:
-        conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASS
-        )
-        cur = conn.cursor()
-
-        with open("municipios.csv", mode='r', encoding='utf-8') as csv_file:
-            csv_reader = csv.reader(csv_file)
-            
-            # 3. Leia o cabeçalho do CSV e guarde-o
-            header_csv = next(csv_reader)
-
-            # 4. Encontre os índices (posições) das colunas requeridas no cabeçalho do CSV
-            try:
-                indices_das_colunas = [header_csv.index(col) for col in colunas_requeridas]
-            except ValueError as e:
-                print(f"ERRO: O CSV não contém todas as colunas necessárias. Coluna faltando: {e}")
-                return # Interrompe a execução
-
-            print(f"Iniciando a importação do arquivo 'municipios.csv'...")
-            
-            # Itera sobre cada linha do arquivo CSV
-            for row in csv_reader:
-                # 5. Crie uma tupla de dados contendo apenas os valores das colunas que queremos, na ordem correta.
-                dados_para_inserir = tuple(row[i] for i in indices_das_colunas)
-                
-                try:
-                    cur.execute(sql_insert_query, dados_para_inserir)
-                except psycopg2.Error as e:
-                    print(f"ERRO ao inserir a linha {dados_para_inserir}: {e}")
-                    conn.rollback()
-
-            conn.commit()
-            print("✅ Importação concluída com sucesso!")
-
-    except FileNotFoundError:
-        print("ERRO: O arquivo 'municipios.csv' não foi encontrado.")
-    except psycopg2.Error as e:
-        print(f"ERRO de banco de dados: {e}")
-    finally:
-        if conn is not None:
-            cur.close()
-            conn.close()
-            print("Conexão com o banco de dados fechada.")
-
-def importar_para_tabela_hospitais():
-    """
-    Função que importa apenas as colunas necessárias de um CSV,
-    independentemente da ordem ou de colunas extras no arquivo.
-    """
-    # 1. Defina as colunas que a sua TABELA precisa, na ordem do INSERT.
-    colunas_requeridas = ['nome', 'codigo_ibge', 'bairro', 'especialidades', 'leitos_totais']
-
-    # 2. Crie o SQL com base nas colunas requeridas.
-    sql_insert_query = f"""
-        INSERT INTO hospitais ({', '.join(colunas_requeridas)})
-        VALUES ({', '.join(['%s'] * len(colunas_requeridas))});
-    """
-
-    conn = None
-    
-    try:
-        conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASS
-        )
-        cur = conn.cursor()
-
-        with open("hospitais.csv", mode='r', encoding='utf-8') as csv_file:
-            csv_reader = csv.reader(csv_file)
-            
-            # 3. Leia o cabeçalho do CSV e guarde-o
-            header_csv = next(csv_reader)
-
-            # 4. Encontre os índices (posições) das colunas requeridas no cabeçalho do CSV
-            try:
-                indices_das_colunas = [header_csv.index(col) for col in colunas_requeridas]
-            except ValueError as e:
-                print(f"ERRO: O CSV não contém todas as colunas necessárias. Coluna faltando: {e}")
-                return # Interrompe a execução
-
-            print(f"Iniciando a importação do arquivo 'municipios.csv'...")
-            
-            # Itera sobre cada linha do arquivo CSV
-            for row in csv_reader:
-                # 5. Crie uma tupla de dados contendo apenas os valores das colunas que queremos, na ordem correta.
-                dados_para_inserir = tuple(row[i] for i in indices_das_colunas)
-                
-                try:
-                    cur.execute(sql_insert_query, dados_para_inserir)
-                except psycopg2.Error as e:
-                    print(f"ERRO ao inserir a linha {dados_para_inserir}: {e}")
-                    conn.rollback()
-
-            conn.commit()
-            print("✅ Importação concluída com sucesso!")
-
-    except FileNotFoundError:
-        print("ERRO: O arquivo 'municipios.csv' não foi encontrado.")
-    except psycopg2.Error as e:
-        print(f"ERRO de banco de dados: {e}")
-    finally:
-        if conn is not None:
-            cur.close()
-            conn.close()
-            print("Conexão com o banco de dados fechada.")
-
-def importar_para_tabela_medicos():
-    """
-    Função que importa apenas as colunas necessárias de um CSV,
-    independentemente da ordem ou de colunas extras no arquivo.
-    """
-    # 1. Defina as colunas que a sua TABELA precisa, na ordem do INSERT.
-    colunas_requeridas = ['nome_completo', 'especialidade', 'codigo_ibge']
-
-    # 2. Crie o SQL com base nas colunas requeridas.
-    sql_insert_query = f"""
-        INSERT INTO medicos ({', '.join(colunas_requeridas)})
-        VALUES ({', '.join(['%s'] * len(colunas_requeridas))});
-    """
-
-    conn = None
-    
-    try:
-        conn = psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=DB_USER,
-            password=DB_PASS
-        )
-        cur = conn.cursor()
-
-        with open("medicos.csv", mode='r', encoding='utf-8') as csv_file:
-            csv_reader = csv.reader(csv_file)
-            
-            # 3. Leia o cabeçalho do CSV e guarde-o
-            header_csv = next(csv_reader)
-
-            # 4. Encontre os índices (posições) das colunas requeridas no cabeçalho do CSV
-            try:
-                indices_das_colunas = [header_csv.index(col) for col in colunas_requeridas]
-            except ValueError as e:
-                print(f"ERRO: O CSV não contém todas as colunas necessárias. Coluna faltando: {e}")
-                return # Interrompe a execução
-
-            print(f"Iniciando a importação do arquivo 'medicos.csv'...")
-            
-            # Itera sobre cada linha do arquivo CSV
-            for row in csv_reader:
-                # 5. Crie uma tupla de dados contendo apenas os valores das colunas que queremos, na ordem correta.
-                dados_para_inserir = tuple(row[i] for i in indices_das_colunas)
-                
-                try:
-                    cur.execute(sql_insert_query, dados_para_inserir)
-                except psycopg2.Error as e:
-                    print(f"ERRO ao inserir a linha {dados_para_inserir}: {e}")
-                    conn.rollback()
-
-            conn.commit()
-            print("✅ Importação concluída com sucesso!")
-
-    except FileNotFoundError:
-        print("ERRO: O arquivo 'medicos.csv' não foi encontrado.")
-    except psycopg2.Error as e:
-        print(f"ERRO de banco de dados: {e}")
-    finally:
-        if conn is not None:
-            cur.close()
-            conn.close()
-            print("Conexão com o banco de dados fechada.")
-
-
-
-import xml.etree.ElementTree as ET
-import psycopg2
 from psycopg2.extras import execute_values
-import time # Para medir o tempo
 
-# --- Suas configurações de DB ---
-DB_HOST = "localhost"
-DB_PORT = "5432"
-DB_NAME = "premiersoft"
-DB_USER = "postgres"
-DB_PASS = "JeFfSc123"
+# --- 1. CONFIGURAÇÃO CENTRALIZADA ---
+# Mantenha todas as configurações em um único lugar.
+DB_CONFIG = {
+    "host": "localhost",
+    "port": "9000",
+    "dbname": "db",
+    "user": "admin",
+    "password": "admin"
+}
 
-XML_FILE_PATH = "pacientes.xml" # Seu arquivo de 2.6GB
-BATCH_SIZE = 1000 # Inserir 1000 registros por vez. Ajuste conforme a memória.
+BATCH_SIZE = 2000 # Lote de inserção para todos os arquivos
 
-def importar_xml_pacientes_otimizado():
-    conn = None
-    total_pacientes = 0
+# --- 2. GERENCIADOR DE CONEXÃO COM O BANCO ---
+# Esta classe gerencia a conexão, commit, rollback e fechamento automaticamente.
+# Isso elimina a repetição do bloco try/except/finally em todas as funções.
+class DatabaseManager:
+    """Um gerenciador de contexto para conexões com o banco de dados PostgreSQL."""
+    def __init__(self, config):
+        self.config = config
+        self.conn = None
+        self.cur = None
+
+    def __enter__(self):
+        """Abre a conexão e o cursor ao entrar no bloco 'with'."""
+        self.conn = psycopg2.connect(**self.config)
+        self.cur = self.conn.cursor()
+        return self.cur
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """
+        Fecha a conexão ao sair do bloco 'with'.
+        Faz commit se tudo deu certo, ou rollback em caso de erro.
+        """
+        try:
+            if exc_val is not None:  # Se ocorreu um erro
+                print(f"Ocorreu um erro, revertendo transação: {exc_val}")
+                self.conn.rollback()
+            else:
+                self.conn.commit()
+                print("Transação concluída com sucesso.")
+        finally:
+            if self.cur:
+                self.cur.close()
+            if self.conn:
+                self.conn.close()
+            print("Conexão com o banco de dados fechada.")
+
+# --- 3. FUNÇÕES DE IMPORTAÇÃO ---
+
+def importar_csv_generico(db_config, filepath, table_name, colunas_tabela, colunas_csv_map):
+    """
+    Função genérica e otimizada para importar QUALQUER arquivo CSV em lotes.
+
+    Args:
+        db_config (dict): Dicionário com as credenciais do banco.
+        filepath (str): Caminho para o arquivo CSV.
+        table_name (str): Nome da tabela de destino.
+        colunas_tabela (list): Lista de nomes das colunas na tabela do banco.
+        colunas_csv_map (list): Lista dos nomes correspondentes no cabeçalho do CSV.
+    """
+    print(f"\nIniciando importação de '{filepath}' para a tabela '{table_name}'...")
     start_time = time.time()
+    total_rows = 0
     
     try:
-        conn = psycopg2.connect(host=DB_HOST, port=DB_PORT, dbname=DB_NAME, user=DB_USER, password=DB_PASS)
-        cur = conn.cursor()
+        with open(filepath, mode='r', encoding='utf-8') as csv_file:
+            reader = csv.DictReader(csv_file)
+            batch = []
 
-        print(f"Iniciando a importação do arquivo gigante '{XML_FILE_PATH}'...")
-        
-        batch_de_pacientes = []
-        # 1. LEITURA EFICIENTE COM iterparse
-        # iterparse lê o arquivo aos poucos. O evento 'end' é disparado quando uma tag é fechada.
-        context = ET.iterparse(XML_FILE_PATH, events=('end',))
-        
-        for event, elem in context:
-            # Processamos apenas quando a tag </Paciente> é encontrada
-            if elem.tag == 'Paciente':
-                try:
-                    cpf = elem.find('CPF').text
-                    nome = elem.find('Nome_Completo').text
-                    genero = elem.find('Genero').text
-                    cod_municipio = elem.find('Cod_municipio').text
-                    bairro = elem.find('Bairro').text
-                    convenio = elem.find('Convenio').text
-                    cid10 = elem.find('CID-10').text
-
-                    # Adiciona os dados como uma tupla ao nosso lote
-                    batch_de_pacientes.append(
-                        (cpf, nome, genero, cod_municipio, bairro, convenio, cid10)
-                    )
+            # Usa o gerenciador de conexão
+            with DatabaseManager(db_config) as cur:
+                for row in reader:
+                    # Monta a tupla de dados na ordem correta das colunas da tabela
+                    dados_para_inserir = tuple(row[col_csv] for col_csv in colunas_csv_map)
+                    batch.append(dados_para_inserir)
                     
-                    total_pacientes += 1
+                    if len(batch) >= BATCH_SIZE:
+                        # Gera o SQL dinamicamente
+                        sql = f"INSERT INTO {table_name} ({', '.join(colunas_tabela)}) VALUES %s ON CONFLICT DO NOTHING"
+                        execute_values(cur, sql, batch)
+                        total_rows += len(batch)
+                        print(f"{total_rows} registros de '{table_name}' inseridos...")
+                        batch.clear()
 
-                    # 2. INSERÇÃO EM LOTE
-                    if len(batch_de_pacientes) >= BATCH_SIZE:
-                        sql_insert = """
-                            INSERT INTO pacientes 
-                            (cpf, nome_completo, genero, codigo_ibge, bairro, convenio, cid10)
-                            VALUES %s
-                            ON CONFLICT (cpf) DO NOTHING;
-                        """
-                        # execute_values é MUITO mais rápido que múltiplos executes
-                        execute_values(cur, sql_insert, batch_de_pacientes)
-                        conn.commit() # Salva o lote no banco
-                        
-                        print(f"{total_pacientes} pacientes processados...")
-                        batch_de_pacientes.clear() # Limpa o lote para a próxima rodada
+                # Insere o lote final
+                if batch:
+                    sql = f"INSERT INTO {table_name} ({', '.join(colunas_tabela)}) VALUES %s ON CONFLICT DO NOTHING"
+                    execute_values(cur, sql, batch)
+                    total_rows += len(batch)
 
-                except (AttributeError, TypeError) as e:
-                    print(f"AVISO: Registro de paciente mal formatado no XML. Pulando. Erro: {e}")
-                
-                # 3. LIBERAÇÃO DE MEMÓRIA
-                # Essencial para arquivos grandes: limpa o elemento da memória após o uso
-                elem.clear()
+    except FileNotFoundError:
+        print(f"ERRO: Arquivo '{filepath}' não encontrado.")
+        return
+    except Exception as e:
+        print(f"ERRO CRÍTICO durante a importação de '{filepath}': {e}")
+        return
 
-        # Insere o último lote que sobrou (caso não seja múltiplo de BATCH_SIZE)
-        if batch_de_pacientes:
-            print("Inserindo lote final...")
-            execute_values(cur, sql_insert, batch_de_pacientes)
-            conn.commit()
+    end_time = time.time()
+    print(f"Finalizada a importação de '{table_name}'. Total de {total_rows} registros em {end_time - start_time:.2f} segundos.")
 
-        end_time = time.time()
-        print("✅ Importação concluída com sucesso!")
-        print(f"Total de pacientes processados: {total_pacientes}")
-        print(f"Tempo total: {end_time - start_time:.2f} segundos")
 
-    except (FileNotFoundError, psycopg2.Error, ET.ParseError) as e:
-        print(f"ERRO CRÍTICO: {e}")
-        if conn:
-            conn.rollback()
-    finally:
-        if conn:
-            cur.close()
-            conn.close()
-            print("Conexão com o banco de dados fechada.")
+def importar_xml_pacientes(db_config, filepath):
+    """
+    Função otimizada para importar um arquivo XML de grande volume.
+    """
+    print(f"\nIniciando importação de XML gigante '{filepath}'...")
+    start_time = time.time()
+    total_pacientes = 0
+    
+    try:
+        # Usa o gerenciador de conexão
+        with DatabaseManager(db_config) as cur:
+            batch = []
+            context = ET.iterparse(filepath, events=('end',))
+            
+            for _, elem in context:
+                if elem.tag == 'Paciente':
+                    # Extração e transformação de dados
+                    cpf = elem.find('CPF').text
+                    # ... (extraia todos os outros campos como antes)
+                    
+                    # Monta a tupla
+                    dados_paciente = (cpf, ...) # Adicione os outros campos
+                    batch.append(dados_paciente)
+
+                    if len(batch) >= BATCH_SIZE:
+                        sql = "INSERT INTO pacientes (cpf, ...) VALUES %s ON CONFLICT (cpf) DO NOTHING"
+                        execute_values(cur, sql, batch)
+                        total_pacientes += len(batch)
+                        print(f"{total_pacientes} pacientes inseridos...")
+                        batch.clear()
+                    
+                    elem.clear() # Libera memória
+
+            # Insere o lote final
+            if batch:
+                sql = "INSERT INTO pacientes (cpf, ...) VALUES %s ON CONFLICT (cpf) DO NOTHING"
+                execute_values(cur, sql, batch)
+                total_pacientes += len(batch)
+
+    except FileNotFoundError:
+        print(f"ERRO: Arquivo '{filepath}' não encontrado.")
+        return
+    except Exception as e:
+        print(f"ERRO CRÍTICO durante a importação do XML: {e}")
+        return
+
+    end_time = time.time()
+    print(f"Finalizada a importação de pacientes. Total de {total_pacientes} registros em {end_time - start_time:.2f} segundos.")
+
+
+# --- 4. ORQUESTRADOR PRINCIPAL ---
+def main():
+
+    # Importar Estados
+    importar_csv_generico(
+        db_config=DB_CONFIG,
+        filepath="estados.csv",
+        table_name="estados",
+        colunas_tabela=['codigo_uf', 'uf', 'nome', 'latitude', 'longitude', 'regiao'],
+        colunas_csv_map=['codigo_uf', 'uf', 'nome', 'latitude', 'longitude', 'regiao']
+    )
+    
+    # Importar Municípios
+    importar_csv_generico(
+        db_config=DB_CONFIG,
+        filepath="municipios.csv",
+        table_name="municipios",
+        colunas_tabela=['codigo_ibge', 'nome', 'latitude', 'longitude', 'codigo_uf'],
+        colunas_csv_map=['codigo_ibge', 'nome', 'latitude', 'longitude', 'codigo_uf']
+    )
+
+    # Importar Hospitais (Exemplo com mapeamento de colunas diferentes)
+    importar_csv_generico(
+        db_config=DB_CONFIG,
+        filepath="hospitais.csv",
+        table_name="hospitais",
+        colunas_tabela=['nome', 'codigo_ibge', 'bairro'],
+        colunas_csv_map=['nome_hospital', 'cidade_ibge', 'bairro_local'] # Nomes hipotéticos no CSV
+    )
+
+    # Importar Pacientes do XML Gigante
+    # importar_xml_pacientes(db_config=DB_CONFIG, filepath="pacientes.xml")
+
+    print("\n--- PROCESSO DE IMPORTAÇÃO FINALIZADO ---")
+
 
 if __name__ == "__main__":
-    importar_xml_pacientes_otimizado()
+    main()
