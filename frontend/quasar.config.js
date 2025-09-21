@@ -55,24 +55,46 @@ export default defineConfig((ctx) => {
       },
 
       vueRouterMode: 'hash', // available values: 'hash', 'history'
-      // vueRouterBase,
-      // vueDevtools,
-      // vueOptionsAPI: false,
 
-      // rebuildCache: true, // rebuilds Vite/linter/etc cache on startup
+      // Optimizations for production builds
+      minify: true,
+      sourcemap: ctx.dev, // Only generate sourcemaps in dev
 
-      // publicPath: '/',
-      // analyze: true,
-      // env: {},
-      // rawDefine: {}
-      // ignorePublicFolder: true,
-      // minify: false,
-      // polyfillModulePreload: true,
-      // distDir
+      // Vite optimizations
+      extendViteConf (viteConf) {
+        // Production optimizations
+        if (!ctx.dev) {
+          // Enable build optimizations
+          viteConf.build = {
+            ...viteConf.build,
+            target: 'es2022',
+            minify: 'terser',
+            terserOptions: {
+              compress: {
+                drop_console: true, // Remove console.log in production
+                drop_debugger: true,
+                pure_funcs: ['console.log', 'console.info', 'console.debug']
+              }
+            },
+            rollupOptions: {
+              output: {
+                // Manual chunk splitting for better caching
+                manualChunks: {
+                  vendor: ['vue', 'vue-router'],
+                  quasar: ['quasar'],
+                  utils: ['axios']
+                }
+              }
+            },
+            // Increase chunk size warning limit
+            chunkSizeWarningLimit: 1000
+          }
 
-      // extendViteConf (viteConf) {},
-      // viteVuePluginOptions: {},
-      
+          // Optimize assets
+          viteConf.assetsInclude = ['**/*.woff2', '**/*.woff']
+        }
+      },
+
       vitePlugins: [
         ['@intlify/unplugin-vue-i18n/vite', {
           // if you want to use Vue I18n Legacy API, you need to set `compositionOnly: false`
