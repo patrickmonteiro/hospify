@@ -280,6 +280,18 @@ async def stream_cid10():
 
 @app.post("/pacientes/stream")
 async def stream_pacientes_post(request: Request):
+
+@app.get("/stats")
+async def get_database_stats():
+    stats = {}
+    tables = ["estados", "municipios", "cid10", "hospitais", "medicos", "pacientes"]
+    try:
+        async with db_pool.acquire() as connection:
+            for table in tables:
+                stats[table] = await connection.fetchval(f"SELECT COUNT(*) FROM {table}")
+        return stats
+    except Exception as e:
+        raise HTTPException(status_code=500, detail="Erro ao obter estatísticas.")
     parser = ET.XMLPullParser(['end'])
     BATCH_SIZE = 5000
     batch = []
