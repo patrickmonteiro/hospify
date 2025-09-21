@@ -1,0 +1,27 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  db:
+    image: postgres:latest
+    container_name: db
+    restart: always
+    env_file:
+      - .env
+    ports:
+      - "9000:5432"
+    volumes:
+    - postgres_data:/var/lib/postgresql/data
+    - ./postgres:/docker-entrypoint-initdb.d  # Mapeando o diretório inteiro
+    networks:
+      # PONTO 1: O nome da rede usado pelo serviço
+      - saude_net
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  # PONTO 2: A declaração da rede, com o mesmo nome do Ponto 1
+  saude_net:
+    driver: bridge
