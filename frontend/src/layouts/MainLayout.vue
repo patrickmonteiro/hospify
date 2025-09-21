@@ -57,7 +57,7 @@
           </q-item-section>
         </q-item>
 
-        <q-item clickable v-ripple>
+        <q-item clickable v-ripple :to="{ name: 'cid' }" >
           <q-item-section avatar>
             <q-icon name="mdi-hospital-box"  />
           </q-item-section>
@@ -81,6 +81,15 @@
           </q-item-section>
           <q-item-section class="text-bold">
             Hospitais
+          </q-item-section>
+        </q-item>
+
+        <q-item clickable v-ripple :to="{ name: 'pacientes'}">
+          <q-item-section avatar>
+            <q-icon name="mdi-account"  />
+          </q-item-section>
+          <q-item-section class="text-bold">
+            Pacientes
           </q-item-section>
         </q-item>
       </q-list>
